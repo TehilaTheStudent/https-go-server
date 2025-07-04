@@ -1,8 +1,12 @@
+
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -31,15 +35,50 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "hello")
 }
 
+
+
 func main() {
+	// Load server certificate and private key
+	cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
+	if err != nil {
+		fmt.Printf("Failed to load server cert/key: %v\n", err)
+		return
+	}
+
+	// Load CA certificate to verify clients
+	caCert, err := os.ReadFile("ca.pem")
+	if err != nil {
+		fmt.Printf("Failed to read CA cert: %v\n", err)
+		return
+	}
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		fmt.Println("Failed to append CA cert to pool")
+		return
+	}
+
+	// Configure TLS with client certificate requirement
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    caCertPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	// Set up HTTP handler with middleware
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hello", helloHandler)
-
 	loggedMux := loggingMiddleware(mux)
 
-	fmt.Println("Server is running on https://0.0.0.0:8443")
-	err := http.ListenAndServeTLS("0.0.0.0:8443", "cert.pem", "key.pem", loggedMux)
-	if err != nil {
+	// Create and run HTTPS server
+	server := &http.Server{
+		Addr:      ":8443",
+		Handler:   loggedMux,
+		TLSConfig: tlsConfig,
+	}
+
+	fmt.Println("🔒 Server is running on https://0.0.0.0:8443 and requires client certificates")
+	if err := server.ListenAndServeTLS("", ""); err != nil {
 		fmt.Printf("Server failed to start: %v\n", err)
 	}
 }
